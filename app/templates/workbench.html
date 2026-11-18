@@ -1,1 +1,82 @@
-{% extends 'base.html' %}{% block content %}<div class="kpis"><div class="kpi"><span>有效租约</span><b>{{run.result.leases|length}}</b></div><div class="kpi"><span>并发峰值</span><b>{{run.result.purchase|map(attribute='peak')|max if run.result.purchase else 0}}</b></div><div class="kpi"><span>超用区间</span><b>{{run.result.final|length}}</b></div><div class="kpi"><span>忽略心跳</span><b>{{run.result.lease_audit|selectattr('reason','equalto','HEARTBEAT_NO_SEAT')|list|length}}</b></div><div class="kpi"><span>隔离事件</span><b>{{run.result.quarantine|length}}</b></div></div><div class="grid"><section class="panel peak"><div class="panel-head"><h2>并发阶梯</h2><span>席位 / UTC</span></div><div class="chart-wrapper"><svg id="usage-chart" aria-label="席位并发与采购上限" role="img"></svg></div><div class="chart-key"><span class="used">实际并发</span><span class="licensed">采购上限</span><span id="chart-time"></span></div><div class="purchase-strip">{% for p in run.result.purchase %}<span title="{{p.excess_seat_hours}}"><b>{{p.product}}</b> 超用 {{p.excess_seat_hours|display_number}} 席位小时</span>{% endfor %}</div></section><section class="panel offline"><div class="panel-head"><h2>离线租约</h2><span>{{run.result.leases|selectattr('kind','equalto','offline')|list|length}} 份</span></div><div class="lock-grid">{% for lease in run.result.leases if lease.kind=='offline' %}<article><div class="lock-icon">锁</div><strong>{{lease.lease_id}}</strong><span>{{lease.user}}</span><b>{{lease.quantity}} 席</b><small>至 {{lease.end[:16]}}</small></article>{% else %}<p>当前无离线租约。</p>{% endfor %}</div></section><section class="panel events"><div class="panel-head"><h2>{{modules[active-1]}}记录</h2><span>{{report.rows|length}} 条</span></div><div class="scroll"><table class="ledger"><thead><tr>{% if report.rows %}{% for key in report.rows[0] %}<th>{{{'lease_id':'租约号','id':'租约号','product':'产品','user':'使用人','start':'开始时间','end':'结束时间','kind':'类型','version':'版本','seats':'原席位','line':'来源行','canonical':'规范产品','a':'起点UTC','b':'终点UTC','rev':'有效版本','quantity':'席位数','count':'并发数','ids':'占用租约','concurrent':'实际并发','capacity':'采购上限','excess':'超用席位','offenders':'责任分配','status':'状态','peak':'峰值','excess_seat_hours':'超用席位小时','overuse_segments':'超用段','reason':'原因码'}.get(key,key)}}</th>{% endfor %}{% endif %}</tr></thead><tbody>{% for event in report.rows %}<tr>{% for key,value in event.items() %}<td class="{{'num' if key in ['a','b','quantity','line','count','concurrent','capacity','excess','peak','excess_seat_hours'] else ''}}" title="{{value}}">{{value|utc_instant if key in ['a','b'] else value|display_number if key=='excess_seat_hours' else value}}</td>{% endfor %}</tr>{% else %}<tr><td>导入租约事件。</td></tr>{% endfor %}</tbody></table></div></section><section class="panel actions"><div class="panel-head"><h2>补传核验</h2><span>{{'超用待审' if run.result.blocked else '可复核'}}</span></div><form id="lease-form"><input id="lease-file" type="file" accept=".csv" aria-label="租约事件文件"><textarea id="lease-text" rows="4" placeholder="粘贴会话事件" aria-label="会话CSV"></textarea><div class="toolbar"><button type="button" class="btn" id="load-fixture">样例</button><button type="submit" class="btn filled">扫描并发</button></div><output id="lease-message" role="status">{{run.result.balance.accepted}} 采信 / {{run.result.balance.blank}} 空行</output></form><div class="review"><button class="btn" type="button" data-review="退回">退回</button><button class="btn" type="button" data-review="通过">确认</button><span>v{{run.revision}}</span></div><div class="quarantine">{% for reason,count in run.result.reasons.items() %}<div><span>{{reason}}</span><b>{{count}}</b></div>{% endfor %}</div></section></div><script type="application/json" id="lease-state">{{{'id':run.id,'revision':run.revision,'usage':run.result.usage}|tojson}}</script>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+{% set result = run.result %}
+{% set summary = result.get('result_summary', {}) %}
+{% set available = summary.get('available_seats', result.get('result_available', {})) %}
+{% set usage_rows = result.get('final', [])|selectattr('kind','equalto','EXCESS')|list %}
+{% set withdrawn_rows = result.get('final', [])|selectattr('kind','equalto','WITHDRAWN_UNCLAIMED')|list %}
+<div class="kpis">
+  <div class="kpi"><span>有效租约</span><b>{{result.leases|length}}</b></div>
+  <div class="kpi"><span>并发峰值</span><b>{{result.purchase|map(attribute='peak')|max if result.purchase else 0}}</b></div>
+  <div class="kpi"><span>可用席位</span><b>{% for p,seats in available.items() %}{{p}} {{seats}}{% if not loop.last %} · {% endif %}{% else %}—{% endfor %}</b></div>
+  <div class="kpi"><span>超用区间</span><b>{{usage_rows|length}}</b></div>
+  <div class="kpi"><span>已撤回未领取</span><b>{{withdrawn_rows|length}}</b></div>
+</div>
+<div class="grid">
+  <section class="panel peak">
+    <div class="panel-head"><h2>并发阶梯</h2><span>席位 / UTC</span></div>
+    <div class="chart-wrapper"><svg id="usage-chart" aria-label="席位并发与采购上限" role="img"></svg></div>
+    <div class="chart-key"><span class="used">实际并发</span><span class="licensed">采购上限</span><span id="chart-time"></span></div>
+    <div class="purchase-strip">
+      {% for p in result.purchase %}<span title="使用人 {{p.user_excess_seat_hours|display_number}} / 误发补正 {{p.misissue_excess_seat_hours|display_number}}"><b>{{p.product}}</b> 超用 {{p.excess_seat_hours|display_number}} 席位小时 · 可用 {{p.available_seats}}</span>{% endfor %}
+    </div>
+  </section>
+  <section class="panel offline">
+    <div class="panel-head"><h2>离线租约</h2><span>{{result.leases|selectattr('kind','equalto','offline')|list|length}} 份</span></div>
+    <div class="lock-grid">
+      {% for lease in result.leases if lease.kind=='offline' %}
+      <article class="{{'revoked' if lease.get('withdrawn') else ''}}">
+        <div class="lock-icon">{{'撤' if lease.get('withdrawn') else '锁'}}</div>
+        <strong>{{lease.lease_id}}</strong><span>{{lease.user}}</span><b>{{lease.quantity}} 席</b>
+        <small>{% if lease.get('withdrawn') %}撤回于行 {{lease.get('correction_line')}} · 原至 {{lease.get('original_end')|utc_instant}}{% elif lease.get('claimed') %}已领取（行 {{lease.get('claim_line')}}）· 至 {{lease.end[:16]}}{% else %}未领取 · 至 {{lease.end[:16]}}{% endif %}</small>
+      </article>
+      {% else %}<p>当前无离线租约。</p>{% endfor %}
+    </div>
+  </section>
+  <section class="panel results">
+    <div class="panel-head"><h2>许可结果</h2><span>可用席位 · 超用归属 · 已撤回未领取</span></div>
+    <div class="result-cols">
+      <div>
+        <h3>可用席位</h3>
+        {% for p,seats in available.items() %}<p><b>{{p}}</b> {{seats}} 席</p>{% else %}<p>—</p>{% endfor %}
+        <h3>席位小时</h3>
+        {% for p in result.purchase %}<p>{{p.product}}：使用人 {{p.user_excess_seat_hours|display_number}} / 误发补正 {{p.misissue_excess_seat_hours|display_number}}</p>{% endfor %}
+      </div>
+      <div>
+        <h3>超用归属</h3>
+        {% for row in usage_rows %}
+        <p><b>{{row.product}}</b> {{row.start[:11]}}–{{row.end[6:11]}} 超 {{row.excess}}
+          <span class="tag {{'misissue' if row.misissue_excess else 'user'}}">{% if row.user_excess %}使用人 {{row.user_excess}}{% endif %}{% if row.user_excess and row.misissue_excess %} · {% endif %}{% if row.misissue_excess %}误发补正 {{row.misissue_excess}}{% endif %}</span>
+          <small>{{row.attribution}}</small></p>
+        {% else %}<p>无超用。</p>{% endfor %}
+      </div>
+      <div>
+        <h3>未领取的已撤回租约</h3>
+        {% for row in withdrawn_rows %}
+        <p><b>{{row.product}} / {{row.lease_id}}</b> {{row.start[:11]}} 起
+          <span class="tag revoked">未领取</span>
+          <small>补正版本 {{row.correction_version}} · 行 {{row.correction_line}} · 原至 {{row.expires}}</small></p>
+        {% else %}<p>无未领取撤回。</p>{% endfor %}
+      </div>
+    </div>
+  </section>
+  <section class="panel events">
+    <div class="panel-head"><h2>{{modules[active-1]}}记录</h2><span>{{report.rows|length}} 条</span></div>
+    <div class="scroll"><table class="ledger"><thead><tr>{% if report.rows %}{% for key in report.rows[0] %}<th>{{{'lease_id':'租约号','id':'租约号','product':'产品','user':'使用人','start':'开始时间','end':'结束时间','kind':'类型','version':'版本','seats':'原席位','line':'来源行','canonical':'规范产品','a':'起点UTC','b':'终点UTC','rev':'有效版本','quantity':'席位数','count':'并发数','ids':'占用租约','concurrent':'实际并发','capacity':'采购上限','available':'可用席位','excess':'超用席位','user_excess':'使用人超用','misissue_excess':'误发补正超用','attribution':'责任归属','status':'状态','peak':'峰值','available_seats':'可用席位','excess_seat_hours':'超用席位小时','user_excess_seat_hours':'使用人席位小时','misissue_excess_seat_hours':'误发补正席位小时','overuse_segments':'超用段','reason':'原因码'}.get(key,key)}}</th>{% endfor %}{% endif %}</tr></thead><tbody>{% for event in report.rows %}<tr>{% for key,value in event.items() %}<td class="{{'num' if key in ['a','b','quantity','line','count','concurrent','capacity','available','excess','user_excess','misissue_excess','peak','available_seats','excess_seat_hours','user_excess_seat_hours','misissue_excess_seat_hours'] else ''}}" title="{{value}}">{{value|utc_instant if key in ['a','b'] else value|display_number if key in ['excess_seat_hours','user_excess_seat_hours','misissue_excess_seat_hours'] else value}}</td>{% endfor %}</tr>{% else %}<tr><td>导入租约事件。</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel actions">
+    <div class="panel-head"><h2>补传核验</h2><span>{{'超用待审' if result.blocked else '可复核'}}</span></div>
+    <form id="lease-form">
+      <input id="lease-file" type="file" accept=".csv" aria-label="租约事件文件">
+      <textarea id="lease-text" rows="4" placeholder="粘贴会话事件" aria-label="会话CSV"></textarea>
+      <div class="toolbar"><button type="button" class="btn" id="load-fixture">样例</button><button type="submit" class="btn filled">扫描并发</button></div>
+      <output id="lease-message" role="status">{{result.balance.accepted}} 采信 / {{result.balance.blank}} 空行{% if checkpoint %} · 已有 {{checkpoint.count}} 条已确认租约可续算{% endif %}</output>
+    </form>
+    {% if checkpoint %}
+    <div class="resume"><button class="btn" type="button" id="resume-run">从已确认租约续算</button><span>已确认 {{checkpoint.count}} 条{% if checkpoint.anchor %} · 断点 {{checkpoint.anchor}}{% endif %}</span></div>
+    {% endif %}
+    <div class="review"><button class="btn" type="button" data-review="退回">退回</button><button class="btn" type="button" data-review="通过">确认</button><span>v{{run.revision}}{% if result.get('resumed') %} · 已续算 {{result.get('resumed_leases')}}{% endif %}</span></div>
+    <div class="quarantine">{% for reason,count in result.reasons.items() %}<div><span>{{reason}}</span><b>{{count}}</b></div>{% endfor %}</div>
+  </section>
+</div>
+<script type="application/json" id="lease-state">{{{'id':run.id,'revision':run.revision,'usage':result.usage,'can_resume':checkpoint is not none}|tojson}}</script>
+{% endblock %}

@@ -6,6 +6,14 @@
 
 按租约有效区间扫线统计并发，同刻先结束后开始；离线到期前始终占席，重复心跳不重复占用。
 
+## 使用资格、采购覆盖与责任
+
+- 误发离线租约在领取前可撤回：撤回在补正时刻生效，占席结束，采购覆盖释放。
+- 已领取的离线租约不会因补正中途停用：继续到原到期，可查领取与补正依据。
+- 未被采购覆盖的已领取误发席位记为误发补正责任，不记到当时有授权的使用人；使用人超用与误发补正超用在页面和证据中分列。
+- 同一补正重试不新增责任；切换失败保留上一版许可结果；中断后从已确认租约续算。
+- 全程回放本地事件，不发起厂商联网或采购动作。。
+
 ## 启动
 
 ```bash
@@ -28,7 +36,7 @@ docker compose config --quiet
 
 ## 输入与输出
 
-CSV可用UTF-8或GB18030；上传保留字符串编号和物理行号。POST `/api/run` 接收 `text` 字段。`GET /api/runs` 查询历史，`POST /api/review` 接收 id、revision、decision。导出按钮下载唯一证据CSV，含运行摘要与隔离记录。
+CSV可用UTF-8或GB18030；上传保留字符串编号和物理行号。POST `/api/run` 接收 `text` 字段，可选 `resume`；`POST /api/resume` 从已确认租约断点续算。`GET /api/runs` 查询历史，`POST /api/review` 接收 id、revision、decision。导出按钮下载唯一证据CSV，含运行摘要、可用席位、超用归属、领取/补正依据、未领取的已撤回租约与隔离记录。补正样例见 `sample_data/instrument-corrections.csv`。
 
 SQLite命名卷保存运行记录。重建演示数据可更换卷名后重启。无需外部网络数据。规则定义见 `docs/DATA-DICTIONARY.md`；边界和测试对应关系见 `docs/DEPTH.md`。
 
